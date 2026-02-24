@@ -4,6 +4,7 @@ import { parse } from "node-html-parser";
 export const runtime = "edge";
 
 const ZENROWS_KEY = process.env.ZENROWS_API_KEY || "";
+const SCRAPINGBEE_KEY = process.env.SCRAPINGBEE_API_KEY || "";
 
 const MIRROR_URLS = [
     "https://otakudesu.best",
@@ -21,6 +22,13 @@ async function fetchViaZenRows(url: string): Promise<string> {
     const apiUrl = `https://api.zenrows.com/v1/?apikey=${ZENROWS_KEY}&url=${encodeURIComponent(url)}&js_render=true&premium_proxy=true`;
     const res = await fetch(apiUrl, { headers: { "Accept": "text/html" } });
     if (!res.ok) throw new Error(`ZenRows HTTP ${res.status}`);
+    return await res.text();
+}
+
+async function fetchViaScrapingBee(url: string): Promise<string> {
+    const apiUrl = `https://app.scrapingbee.com/api/v1/?api_key=${SCRAPINGBEE_KEY}&url=${encodeURIComponent(url)}&render_js=true&block_ads=true&block_resources=false`;
+    const res = await fetch(apiUrl, { headers: { "Accept": "text/html" } });
+    if (!res.ok) throw new Error(`ScrapingBee HTTP ${res.status}`);
     return await res.text();
 }
 
@@ -52,7 +60,19 @@ async function fetchDirect(url: string, ua: string): Promise<string> {
 async function fetchPage(path: string): Promise<{ html: string; source: string }> {
     const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
-    // ZenRows bypasses Cloudflare (preferred in production)
+    // 1. ScrapingBee (bypasses Cloudflare)
+    if (SCRAPINGBEE_KEY) {
+        for (const mirror of MIRROR_URLS) {
+            try {
+                const html = await fetchViaScrapingBee(`${mirror}${path}`);
+                return { html, source: `scrapingbee:${mirror}` };
+            } catch (e: any) {
+                console.warn(`[ScrapingBee] ❌ ${mirror}: ${e.message}`);
+            }
+        }
+    }
+
+    // 2. ZenRows (alternative bypass)
     if (ZENROWS_KEY) {
         for (const mirror of MIRROR_URLS) {
             try {
@@ -64,7 +84,7 @@ async function fetchPage(path: string): Promise<{ html: string; source: string }
         }
     }
 
-    // Fallback: direct fetch (works on localhost or non-CF-protected pages)
+    // 3. Direct fetch (works on localhost or non-CF-protected pages)
     for (const mirror of MIRROR_URLS) {
         try {
             const html = await fetchDirect(`${mirror}${path}`, ua);
@@ -75,9 +95,9 @@ async function fetchPage(path: string): Promise<{ html: string; source: string }
     }
 
     throw new Error(
-        ZENROWS_KEY
-            ? "All ZenRows + direct attempts failed"
-            : "All direct attempts failed. Set ZENROWS_API_KEY env var to bypass Cloudflare."
+        (SCRAPINGBEE_KEY || ZENROWS_KEY)
+            ? "All scraping API + direct attempts failed"
+            : "All direct attempts failed. Set SCRAPINGBEE_API_KEY or ZENROWS_API_KEY to bypass Cloudflare."
     );
 }
 
