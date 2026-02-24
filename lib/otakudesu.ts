@@ -1,23 +1,55 @@
-import axios from "axios";
+import axios, { AxiosInstance } from "axios";
 import { parse } from "node-html-parser";
 import type { AnimeCard, Pagination, AnimeDetail, Episode, StreamData, DownloadLink } from "./types";
 
-const OTAKUDESU_URL = (process.env.NEXT_PUBLIC_OTAKUDESU_URL || "https://otakudesu.cloud").replace(/\/$/, "");
+// Support multiple mirror URLs — comma-separated in env, with fallback defaults
+const MIRROR_URLS: string[] = (() => {
+  const envUrls = process.env.NEXT_PUBLIC_OTAKUDESU_URLS || process.env.NEXT_PUBLIC_OTAKUDESU_URL || "";
+  const defaults = [
+    "https://otakudesu.cloud",
+    "https://otakudesu.cam",
+    "https://otakudesu.show",
+  ];
 
-const client = axios.create({
-  baseURL: OTAKUDESU_URL,
-  timeout: 10000,
-  headers: {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
-    "Referer": OTAKUDESU_URL + "/",
-  },
-});
+  if (envUrls.trim()) {
+    return envUrls.split(",").map(u => u.trim().replace(/\/$/, "")).filter(Boolean);
+  }
+  return defaults;
+})();
+
+function createClient(baseURL: string): AxiosInstance {
+  return axios.create({
+    baseURL,
+    timeout: 8000,
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+      "Referer": baseURL + "/",
+    },
+  });
+}
+
+// Try each mirror URL until one succeeds
+async function fetchWithFallback(path: string): Promise<string> {
+  let lastError: any = null;
+  for (const mirror of MIRROR_URLS) {
+    try {
+      const client = createClient(mirror);
+      const { data } = await client.get(path);
+      console.log(`[otakudesu] ✅ Success from: ${mirror}${path}`);
+      return data;
+    } catch (err: any) {
+      console.warn(`[otakudesu] ❌ Failed from ${mirror}: ${err.message}`);
+      lastError = err;
+    }
+  }
+  throw lastError || new Error("All mirror URLs failed");
+}
 
 export const getOngoingAnime = async (page = 1): Promise<{ data: AnimeCard[]; pagination: Pagination }> => {
   try {
-    const { data } = await client.get(`/ongoing-anime/page/${page}/`);
+    const data = await fetchWithFallback(`/ongoing-anime/page/${page}/`);
     const root = parse(data);
     const animeList: AnimeCard[] = [];
 
@@ -78,7 +110,7 @@ export const getOngoingAnime = async (page = 1): Promise<{ data: AnimeCard[]; pa
 
 export const getAnimeDetail = async (animeId: string): Promise<AnimeDetail | null> => {
   try {
-    const { data } = await client.get(`/anime/${animeId}/`);
+    const data = await fetchWithFallback(`/anime/${animeId}/`);
     const root = parse(data);
 
     const title = root.querySelector(".jdlx h1")?.text.trim() || root.querySelector(".infozin h1")?.text.trim() || "";
@@ -153,7 +185,7 @@ export const getAnimeDetail = async (animeId: string): Promise<AnimeDetail | nul
 
 export const getEpisodeStream = async (episodeId: string): Promise<StreamData | null> => {
   try {
-    const { data } = await client.get(`/episode/${episodeId}/`);
+    const data = await fetchWithFallback(`/episode/${episodeId}/`);
     const root = parse(data);
 
     const title = root.querySelector(".venutama h1")?.text.trim() || "";
@@ -254,7 +286,7 @@ export const getEpisodeStream = async (episodeId: string): Promise<StreamData | 
 
 export const searchAnime = async (query: string): Promise<AnimeCard[]> => {
   try {
-    const { data } = await client.get(`/?s=${encodeURIComponent(query)}&post_type=anime`);
+    const data = await fetchWithFallback(`/?s=${encodeURIComponent(query)}&post_type=anime`);
     const root = parse(data);
     const animeList: AnimeCard[] = [];
 
