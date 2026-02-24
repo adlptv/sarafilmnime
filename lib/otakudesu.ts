@@ -6,10 +6,12 @@ import type { AnimeCard, Pagination, AnimeDetail, Episode, StreamData, DownloadL
 const MIRROR_URLS: string[] = (() => {
   const envUrls = process.env.OTAKUDESU_URLS || process.env.NEXT_PUBLIC_OTAKUDESU_URLS || process.env.NEXT_PUBLIC_OTAKUDESU_URL || "";
   const defaults = [
+    "https://otakudesu.best",
+    "https://otakudesu.io",
     "https://otakudesu.cloud",
     "https://otakudesu.cam",
-    "https://otakudesu.show",
     "https://otakudesu.wtf",
+    "https://otakudesu.show",
   ];
 
   if (envUrls.trim()) {
