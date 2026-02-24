@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parse } from "node-html-parser";
 
-// Edge runtime uses different IP ranges from serverless functions
-// This may bypass Cloudflare blocking
 export const runtime = "edge";
+
+const ZENROWS_KEY = process.env.ZENROWS_API_KEY || "";
 
 const MIRROR_URLS = [
     "https://otakudesu.best",
@@ -15,10 +15,16 @@ const MIRROR_URLS = [
 const USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
 ];
 
-async function fetchPage(url: string, ua: string): Promise<string> {
+async function fetchViaZenRows(url: string): Promise<string> {
+    const apiUrl = `https://api.zenrows.com/v1/?apikey=${ZENROWS_KEY}&url=${encodeURIComponent(url)}&js_render=true&premium_proxy=true`;
+    const res = await fetch(apiUrl, { headers: { "Accept": "text/html" } });
+    if (!res.ok) throw new Error(`ZenRows HTTP ${res.status}`);
+    return await res.text();
+}
+
+async function fetchDirect(url: string, ua: string): Promise<string> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
@@ -27,7 +33,7 @@ async function fetchPage(url: string, ua: string): Promise<string> {
             headers: {
                 "User-Agent": ua,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
                 "Upgrade-Insecure-Requests": "1",
                 "Sec-Fetch-Dest": "document",
                 "Sec-Fetch-Mode": "navigate",
@@ -43,6 +49,38 @@ async function fetchPage(url: string, ua: string): Promise<string> {
     }
 }
 
+async function fetchPage(path: string): Promise<{ html: string; source: string }> {
+    const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+
+    // ZenRows bypasses Cloudflare (preferred in production)
+    if (ZENROWS_KEY) {
+        for (const mirror of MIRROR_URLS) {
+            try {
+                const html = await fetchViaZenRows(`${mirror}${path}`);
+                return { html, source: `zenrows:${mirror}` };
+            } catch (e: any) {
+                console.warn(`[ZenRows] ❌ ${mirror}: ${e.message}`);
+            }
+        }
+    }
+
+    // Fallback: direct fetch (works on localhost or non-CF-protected pages)
+    for (const mirror of MIRROR_URLS) {
+        try {
+            const html = await fetchDirect(`${mirror}${path}`, ua);
+            return { html, source: `direct:${mirror}` };
+        } catch (e: any) {
+            console.warn(`[direct] ❌ ${mirror}: ${e.message}`);
+        }
+    }
+
+    throw new Error(
+        ZENROWS_KEY
+            ? "All ZenRows + direct attempts failed"
+            : "All direct attempts failed. Set ZENROWS_API_KEY env var to bypass Cloudflare."
+    );
+}
+
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get("type") || "anime";
@@ -52,37 +90,23 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Missing id" }, { status: 400 });
     }
 
-    const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-    let lastError = "";
+    const path = type === "anime" ? `/anime/${id}/` : `/episode/${id}/`;
 
-    for (const mirror of MIRROR_URLS) {
-        try {
-            let path = "";
-            if (type === "anime") path = `/anime/${id}/`;
-            else if (type === "episode") path = `/episode/${id}/`;
+    try {
+        const { html, source } = await fetchPage(path);
 
-            const html = await fetchPage(`${mirror}${path}`, ua);
+        const data = type === "anime" ? parseAnimeDetail(html, id) : parseEpisode(html, id);
 
-            if (type === "anime") {
-                const data = parseAnimeDetail(html, id);
-                if (data.title) {
-                    return NextResponse.json({ ok: true, data, mirror }, {
-                        headers: { "Cache-Control": "public, s-maxage=300" }
-                    });
-                }
-            } else if (type === "episode") {
-                const data = parseEpisode(html, id);
-                return NextResponse.json({ ok: true, data, mirror }, {
-                    headers: { "Cache-Control": "public, s-maxage=60" }
-                });
-            }
-        } catch (e: any) {
-            lastError = e.message;
-            console.warn(`[edge-scraper] ❌ ${mirror}: ${e.message}`);
+        if (type === "anime" && !(data as any).title) {
+            return NextResponse.json({ ok: false, error: "Parsed but no title found", source }, { status: 502 });
         }
-    }
 
-    return NextResponse.json({ ok: false, error: lastError }, { status: 502 });
+        return NextResponse.json({ ok: true, data, source }, {
+            headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" },
+        });
+    } catch (e: any) {
+        return NextResponse.json({ ok: false, error: e.message }, { status: 502 });
+    }
 }
 
 function parseAnimeDetail(html: string, animeId: string) {
@@ -108,8 +132,7 @@ function parseAnimeDetail(html: string, animeId: string) {
         if (text.includes("Produser")) detail.producer = text.split(":")[1]?.trim();
     });
 
-    const episodeContainers = root.querySelectorAll(".episodelist");
-    episodeContainers.forEach((container) => {
+    root.querySelectorAll(".episodelist").forEach((container) => {
         if (container.text.toLowerCase().includes("batch")) return;
         container.querySelectorAll("ul li").forEach((li) => {
             const epTitle = li.querySelector("a")?.text.trim() || "";
