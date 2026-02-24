@@ -1,14 +1,15 @@
-import axios, { AxiosInstance } from "axios";
+import axios from "axios";
 import { parse } from "node-html-parser";
 import type { AnimeCard, Pagination, AnimeDetail, Episode, StreamData, DownloadLink } from "./types";
 
 // Support multiple mirror URLs — comma-separated in env, with fallback defaults
 const MIRROR_URLS: string[] = (() => {
-  const envUrls = process.env.NEXT_PUBLIC_OTAKUDESU_URLS || process.env.NEXT_PUBLIC_OTAKUDESU_URL || "";
+  const envUrls = process.env.OTAKUDESU_URLS || process.env.NEXT_PUBLIC_OTAKUDESU_URLS || process.env.NEXT_PUBLIC_OTAKUDESU_URL || "";
   const defaults = [
     "https://otakudesu.cloud",
     "https://otakudesu.cam",
     "https://otakudesu.show",
+    "https://otakudesu.wtf",
   ];
 
   if (envUrls.trim()) {
@@ -17,17 +18,15 @@ const MIRROR_URLS: string[] = (() => {
   return defaults;
 })();
 
-function createClient(baseURL: string): AxiosInstance {
-  return axios.create({
-    baseURL,
-    timeout: 8000,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
-      "Referer": baseURL + "/",
-    },
-  });
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+];
+
+function getRandomUA() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
 // Try each mirror URL until one succeeds
@@ -35,12 +34,29 @@ async function fetchWithFallback(path: string): Promise<string> {
   let lastError: any = null;
   for (const mirror of MIRROR_URLS) {
     try {
-      const client = createClient(mirror);
-      const { data } = await client.get(path);
+      const ua = getRandomUA();
+      const { data } = await axios.get(`${mirror}${path}`, {
+        timeout: 12000,
+        maxRedirects: 5,
+        headers: {
+          "User-Agent": ua,
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Connection": "keep-alive",
+          "Upgrade-Insecure-Requests": "1",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-User": "?1",
+          "Cache-Control": "max-age=0",
+          "Referer": mirror + "/",
+        },
+      });
       console.log(`[otakudesu] ✅ Success from: ${mirror}${path}`);
       return data;
     } catch (err: any) {
-      console.warn(`[otakudesu] ❌ Failed from ${mirror}: ${err.message}`);
+      console.warn(`[otakudesu] ❌ Failed from ${mirror}${path}: ${err?.response?.status || err.message}`);
       lastError = err;
     }
   }
