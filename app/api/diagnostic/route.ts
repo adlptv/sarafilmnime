@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import axios from "axios";
 
-const ANIME_API_URL = process.env.ANIME_API_URL?.replace(/\/$/, "") || "";
+const _rawApiUrl = process.env.ANIME_API_URL || "";
+const ANIME_API_URL = _rawApiUrl
+    ? (_rawApiUrl.startsWith("http") ? _rawApiUrl : `https://${_rawApiUrl}`).replace(/\/$/, "")
+    : "";
 
 export async function GET(request: NextRequest) {
     const results: any = {
-        ANIME_API_URL: ANIME_API_URL ? "SET ✅" : "NOT SET ❌",
+        ANIME_API_URL_RAW: _rawApiUrl || "NOT SET ❌",
+        ANIME_API_URL_RESOLVED: ANIME_API_URL || "NOT SET ❌",
         timestamp: new Date().toISOString(),
         tests: {},
     };

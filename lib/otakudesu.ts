@@ -6,7 +6,10 @@ import type { AnimeCard, Pagination, AnimeDetail, Episode, StreamData, DownloadL
 // MODE 1: REST API (Wajik Anime API) — digunakan jika ANIME_API_URL tersedia
 // Deploy Wajik Anime API ke Railway/Render, lalu set ANIME_API_URL di Vercel
 // ============================================================
-const ANIME_API_URL = process.env.ANIME_API_URL?.replace(/\/$/, "") || "";
+const _rawApiUrl = process.env.ANIME_API_URL || "";
+const ANIME_API_URL = _rawApiUrl
+  ? (_rawApiUrl.startsWith("http") ? _rawApiUrl : `https://${_rawApiUrl}`).replace(/\/$/, "")
+  : "";
 
 // ============================================================
 // MODE 2: Direct Scraping (fallback, works on localhost)
