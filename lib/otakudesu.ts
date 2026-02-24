@@ -11,6 +11,11 @@ const ANIME_API_URL = _rawApiUrl
   ? (_rawApiUrl.startsWith("http") ? _rawApiUrl : `https://${_rawApiUrl}`).replace(/\/$/, "")
   : "";
 
+// The app's own edge scraper endpoint (used for anime detail + episode from Vercel edge runtime)
+const SITE_URL = process.env.VERCEL_URL
+  ? `https://${process.env.VERCEL_URL}`
+  : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
 // ============================================================
 // MODE 2: Direct Scraping (fallback, works on localhost)
 // ============================================================
@@ -139,37 +144,53 @@ export const getOngoingAnime = async (page = 1): Promise<{ data: AnimeCard[]; pa
 };
 
 export const getAnimeDetail = async (animeId: string): Promise<AnimeDetail | null> => {
-  // — REST API mode —
+  // — Edge Scraper (primary for production: uses Vercel edge IPs) —
+  try {
+    const url = `${SITE_URL}/api/scrape?type=anime&id=${encodeURIComponent(animeId)}`;
+    const res = await fetch(url, { next: { revalidate: 300 } });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.ok && json.data?.title) {
+        console.log(`[getAnimeDetail] ✅ Edge scraper success (${json.mirror})`);
+        return json.data as AnimeDetail;
+      }
+    }
+  } catch (err: any) {
+    console.warn("[getAnimeDetail] Edge scraper failed:", err.message);
+  }
+
+  // — REST API fallback (only if Railway API responds in time) —
   if (ANIME_API_URL) {
     try {
       const json = await callApi(`/otakudesu/anime/${animeId}`);
-      return {
-        title: json.title || "",
-        poster: json.poster || "",
-        japaneseTitle: json.japaneseTitle,
-        score: json.score,
-        producer: json.producer,
-        type: json.type,
-        status: json.status,
-        totalEpisodes: json.totalEpisodes,
-        duration: json.duration,
-        releaseDate: json.releaseDate,
-        studio: json.studio,
-        genre: json.genre,
-        synopsis: json.synopsis || json.sinopsis,
-        episodes: (json.episodeList ?? json.episodes ?? []).map((e: any) => ({
-          title: e.title,
-          episodeId: e.episodeId,
-          uploadedDate: e.uploadedDate,
-        })),
-      };
+      if (json?.title) {
+        return {
+          title: json.title || "",
+          poster: json.poster || "",
+          japaneseTitle: json.japaneseTitle,
+          score: json.score,
+          producer: json.producer,
+          type: json.type,
+          status: json.status,
+          totalEpisodes: json.totalEpisodes,
+          duration: json.duration,
+          releaseDate: json.releaseDate,
+          studio: json.studio,
+          genre: json.genre,
+          synopsis: json.synopsis || json.sinopsis,
+          episodes: (json.episodeList ?? json.episodes ?? []).map((e: any) => ({
+            title: e.title,
+            episodeId: e.episodeId,
+            uploadedDate: e.uploadedDate,
+          })),
+        };
+      }
     } catch (error) {
-      console.error("[api] getAnimeDetail failed:", error);
-      return null;
+      console.error("[api] getAnimeDetail Railway failed:", error);
     }
   }
 
-  // — Scraping mode —
+  // — Direct scraping fallback (works on localhost) —
   try {
     const data = await fetchWithFallback(`/anime/${animeId}/`);
     const root = parse(data);
@@ -198,8 +219,7 @@ export const getAnimeDetail = async (animeId: string): Promise<AnimeDetail | nul
     const episodeContainers = root.querySelectorAll(".episodelist");
     episodeContainers.forEach((container) => {
       if (container.text.toLowerCase().includes("batch")) return;
-      const list = container.querySelectorAll("ul li");
-      list.forEach((li) => {
+      container.querySelectorAll("ul li").forEach((li) => {
         const epTitle = li.querySelector("a")?.text.trim() || "";
         const epId = li.querySelector("a")?.getAttribute("href")?.split("/").filter(Boolean).pop() || "";
         const uploadedDate = li.querySelector(".zeebr")?.text.trim() || "";
@@ -213,6 +233,7 @@ export const getAnimeDetail = async (animeId: string): Promise<AnimeDetail | nul
   } catch (error) {
     console.error("Error fetching anime detail:", error);
     return null;
+
   }
 };
 
