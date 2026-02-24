@@ -2,13 +2,16 @@ import axios from "axios";
 import { parse } from "node-html-parser";
 import type { AnimeCard, Pagination, AnimeDetail, Episode, StreamData, DownloadLink } from "./types";
 
-const OTAKUDESU_URL = process.env.NEXT_PUBLIC_OTAKUDESU_URL || "https://otakudesu.cloud";
+const OTAKUDESU_URL = (process.env.NEXT_PUBLIC_OTAKUDESU_URL || "https://otakudesu.cloud").replace(/\/$/, "");
 
 const client = axios.create({
   baseURL: OTAKUDESU_URL,
+  timeout: 10000,
   headers: {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": OTAKUDESU_URL,
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+    "Referer": OTAKUDESU_URL + "/",
   },
 });
 
@@ -22,7 +25,27 @@ export const getOngoingAnime = async (page = 1): Promise<{ data: AnimeCard[]; pa
     items.forEach((item) => {
       const title = item.querySelector(".jdlflm")?.text.trim() || "";
       const poster = item.querySelector("img")?.getAttribute("src") || "";
-      const animeId = item.querySelector("a")?.getAttribute("href")?.split("/").filter(Boolean).pop() || "";
+
+      // Look for all links and find one that's likely the anime page (containing /anime/)
+      const links = item.querySelectorAll("a");
+      let animeId = "";
+      for (const link of links) {
+        const href = link.getAttribute("href") || "";
+        if (href.includes("/anime/")) {
+          animeId = href.split("/").filter(Boolean).pop() || "";
+          break;
+        }
+      }
+
+      // Fallback: if no /anime/ link, take the first one but remove episode info if it's an episode link
+      if (!animeId) {
+        const firstHref = links[0]?.getAttribute("href") || "";
+        animeId = firstHref.split("/").filter(Boolean).pop() || "";
+
+        // If it looks like an episode slug, it might still fail to find anime detail
+        // but we'll try to handle it in getAnimeDetail
+      }
+
       const episodes = item.querySelector(".epz")?.text.trim() || "";
       const latestReleaseDate = item.querySelector(".newz")?.text.trim() || "";
       const releaseDay = item.querySelector(".epztipe")?.text.trim() || "";
